@@ -14,17 +14,25 @@
  * limitations under the License.
  *********************************************************************/
 
-package main
+package options
 
 import (
-	"os"
-
-	"github.com/commcos/polygateway/cmd/tools/app"
-	"k8s.io/component-base/cli"
+	cliflag "k8s.io/component-base/cli/flag"
+	"k8s.io/component-base/logs"
+	logsapi "k8s.io/component-base/logs/api/v1"
 )
 
-func main() {
-	command := app.NewToolServer()
-	code := cli.Run(command)
-	os.Exit(code)
+type ServerRunOptions struct {
+	Logs *logs.Options
+}
+
+func NewServerRunOptions() *ServerRunOptions {
+	return &ServerRunOptions{
+		Logs: logs.NewOptions(),
+	}
+}
+
+func (rs *ServerRunOptions) Flags() (fss cliflag.NamedFlagSets) {
+	logsapi.AddFlags(rs.Logs, fss.FlagSet("logs"))
+	return fss
 }

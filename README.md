@@ -10,3 +10,9 @@ PolyGateway is an open - source project designed as a communication bridge for m
 
 ## Usage
 
+
+## Attribution
+
+Parts of this project's SIP protocol implementation are derived from or inspired by [LiveKit's SIP implementation](https://github.com/livekit/sip). We gratefully acknowledge LiveKit's contribution to the open-source community.
+
+Please ensure you comply with LiveKit's licensing terms when using this software.

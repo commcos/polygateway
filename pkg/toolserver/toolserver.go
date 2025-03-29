@@ -14,17 +14,25 @@
  * limitations under the License.
  *********************************************************************/
 
-package main
+package toolserver
 
 import (
-	"os"
+	"fmt"
 
-	"github.com/commcos/polygateway/cmd/tools/app"
-	"k8s.io/component-base/cli"
+	"github.com/commcos/component-base/cli"
+	"github.com/commcos/component-base/cli/shell"
 )
 
-func main() {
-	command := app.NewToolServer()
-	code := cli.Run(command)
-	os.Exit(code)
+func EnterShell() error {
+	cfg := shell.Config{
+		Type: shell.ShellTypeLocal,
+	}
+	sl := shell.NewShell(cfg)
+	cli.SetDefaultCli(sl)
+
+	stop := make(chan struct{})
+	if err := cli.StartInteractiveShell(stop); err != nil {
+		return fmt.Errorf("start interactive shell failed: %w", err)
+	}
+	return fmt.Errorf("shell exited")
 }

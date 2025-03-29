@@ -14,17 +14,11 @@
  * limitations under the License.
  *********************************************************************/
 
-package main
+package options
 
-import (
-	"os"
+// Validate checks ServerRunOptions and return a slice of found errors.
+func (s *ServerRunOptions) Validate() []error {
+	var errs []error
 
-	"github.com/commcos/polygateway/cmd/tools/app"
-	"k8s.io/component-base/cli"
-)
-
-func main() {
-	command := app.NewToolServer()
-	code := cli.Run(command)
-	os.Exit(code)
+	return errs
 }
