@@ -19,7 +19,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/livekit/protocol/rpc"
 	"io"
 	"log/slog"
 	"net"
@@ -31,14 +30,13 @@ import (
 	"github.com/icholy/digest"
 	"golang.org/x/exp/maps"
 
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sipgo"
 	"github.com/livekit/sipgo/sip"
 
-	"github.com/livekit/sip/pkg/config"
-	"github.com/livekit/sip/pkg/media"
-	"github.com/livekit/sip/pkg/stats"
+	apisip "github.com/commcos/msengine/apis/sip"
+	"github.com/commcos/msengine/media"
+	"github.com/commcos/msengine/signaling/sip/config"
+	"github.com/commcos/msengine/signaling/sip/stats"
 )
 
 const (
@@ -52,7 +50,7 @@ var (
 
 type CallInfo struct {
 	TrunkID string
-	Call    *rpc.SIPCall
+	Call    *apisip.SIPCall
 	Pin     string
 	NoPin   bool
 }
@@ -84,35 +82,34 @@ const (
 )
 
 type CallDispatch struct {
-	Result              DispatchResult
-	Room                RoomConfig
+	Result DispatchResult
+	// Room                RoomConfig
 	ProjectID           string
 	TrunkID             string
 	DispatchRuleID      string
 	Headers             map[string]string
 	HeadersToAttributes map[string]string
-	IncludeHeaders      livekit.SIPHeaderOptions
+	IncludeHeaders      apisip.SIPHeaderOptions
 	AttributesToHeaders map[string]string
-	EnabledFeatures     []livekit.SIPFeature
+	EnabledFeatures     []apisip.SIPFeature
 	RingingTimeout      time.Duration
 	MaxCallDuration     time.Duration
 }
 
 type Handler interface {
-	GetAuthCredentials(ctx context.Context, call *rpc.SIPCall) (AuthInfo, error)
+	GetAuthCredentials(ctx context.Context, call *apisip.SIPCall) (AuthInfo, error)
 	DispatchCall(ctx context.Context, info *CallInfo) CallDispatch
-	GetMediaProcessor(features []livekit.SIPFeature) media.PCM16Processor
+	GetMediaProcessor(features []apisip.SIPFeature) media.PCM16Processor
 
 	RegisterTransferSIPParticipantTopic(sipCallId string) error
 	DeregisterTransferSIPParticipantTopic(sipCallId string)
 }
 
 type Server struct {
-	log          logger.Logger
+	log          *slog.Logger
 	mon          *stats.Monitor
 	region       string
 	sipSrv       *sipgo.Server
-	getIOClient  GetIOInfoClient
 	sipListeners []io.Closer
 	sipUnhandled RequestHandler
 
@@ -135,16 +132,13 @@ type inProgressInvite struct {
 	challenge digest.Challenge
 }
 
-func NewServer(region string, conf *config.Config, log logger.Logger, mon *stats.Monitor, getIOClient GetIOInfoClient) *Server {
-	if log == nil {
-		log = logger.GetLogger()
-	}
+func NewServer(region string, conf *config.Config, mon *stats.Monitor) *Server {
+
 	s := &Server{
-		log:         log,
+		log:         slog.Default(),
 		conf:        conf,
 		region:      region,
 		mon:         mon,
-		getIOClient: getIOClient,
 		activeCalls: make(map[RemoteTag]*inboundCall),
 		byLocal:     make(map[LocalTag]*inboundCall),
 	}
@@ -169,7 +163,7 @@ func (s *Server) startUDP(addr netip.AddrPort) error {
 		return fmt.Errorf("cannot listen on the UDP signaling port %d: %w", s.conf.SIPPortListen, err)
 	}
 	s.sipListeners = append(s.sipListeners, lis)
-	s.log.Infow("sip signaling listening on",
+	s.log.Info("sip signaling listening on",
 		"local", s.sconf.SignalingIPLocal, "external", s.sconf.SignalingIP,
 		"port", addr.Port(), "announce-port", s.conf.SIPPort,
 		"proto", "udp",
@@ -192,7 +186,7 @@ func (s *Server) startTCP(addr netip.AddrPort) error {
 		return fmt.Errorf("cannot listen on the TCP signaling port %d: %w", s.conf.SIPPortListen, err)
 	}
 	s.sipListeners = append(s.sipListeners, lis)
-	s.log.Infow("sip signaling listening on",
+	s.log.Info("sip signaling listening on",
 		"local", s.sconf.SignalingIPLocal, "external", s.sconf.SignalingIP,
 		"port", addr.Port(), "announce-port", s.conf.SIPPort,
 		"proto", "tcp",
@@ -216,7 +210,7 @@ func (s *Server) startTLS(addr netip.AddrPort, conf *tls.Config) error {
 	}
 	lis := tls.NewListener(tlis, conf)
 	s.sipListeners = append(s.sipListeners, lis)
-	s.log.Infow("sip signaling listening on",
+	s.log.Info("sip signaling listening on",
 		"local", s.sconf.SignalingIPLocal, "external", s.sconf.SignalingIP,
 		"port", addr.Port(), "announce-port", s.conf.TLS.Port,
 		"proto", "tls",
@@ -234,7 +228,7 @@ type RequestHandler func(req *sip.Request, tx sip.ServerTransaction) bool
 
 func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, unhandled RequestHandler) error {
 	s.sconf = sc
-	s.log.Infow("server starting", "local", s.sconf.SignalingIPLocal, "external", s.sconf.SignalingIP)
+	s.log.Info("server starting", "local", s.sconf.SignalingIPLocal, "external", s.sconf.SignalingIP)
 
 	if agent == nil {
 		ua, err := sipgo.NewUA(
@@ -248,7 +242,7 @@ func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, unhandled Requ
 
 	var err error
 	s.sipSrv, err = sipgo.NewServer(agent,
-		sipgo.WithServerLogger(slog.New(logger.ToSlogHandler(s.log))),
+		sipgo.WithServerLogger(s.log),
 	)
 	if err != nil {
 		return err

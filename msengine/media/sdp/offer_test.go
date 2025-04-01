@@ -20,11 +20,11 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/livekit/sip/pkg/media"
-	"github.com/livekit/sip/pkg/media/g711"
-	"github.com/livekit/sip/pkg/media/g722"
-	"github.com/livekit/sip/pkg/media/rtp"
-	. "github.com/livekit/sip/pkg/media/sdp"
+	"github.com/commcos/msengine/media"
+	"github.com/commcos/msengine/media/g711"
+	"github.com/commcos/msengine/media/g722"
+	"github.com/commcos/msengine/media/rtp"
+	. "github.com/commcos/msengine/media/sdp"
 )
 
 func TestSDPMediaOffer(t *testing.T) {

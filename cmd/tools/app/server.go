@@ -88,5 +88,11 @@ func NewToolServer() *cobra.Command {
 }
 
 func Run(s *options.ServerRunOptions) error {
-	return toolserver.EnterShell()
+
+	ts := toolserver.NewToolServer()
+	if ts == nil {
+		return fmt.Errorf("failed to create tool server")
+	}
+
+	return ts.EnterShell()
 }

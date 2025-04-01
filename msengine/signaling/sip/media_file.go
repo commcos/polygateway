@@ -15,8 +15,8 @@
 package sip
 
 import (
-	"github.com/livekit/sip/pkg/media"
-	"github.com/livekit/sip/res"
+	"github.com/commcos/msengine/media"
+	"github.com/commcos/msengine/signaling/sip/res"
 )
 
 type mediaRes struct {

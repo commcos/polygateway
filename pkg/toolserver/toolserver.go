@@ -21,14 +21,40 @@ import (
 
 	"github.com/commcos/component-base/cli"
 	"github.com/commcos/component-base/cli/shell"
+	"github.com/commcos/msengine"
 )
 
-func EnterShell() error {
+type ToolServer struct {
+	cliHandle cli.Interface
+
+	msEngine *msengine.CoreEngine
+}
+
+func NewToolServer() *ToolServer {
+	ts := &ToolServer{
+		msEngine: msengine.NewCoreEngine(),
+	}
+
+	if ts.msEngine == nil {
+		fmt.Println("failed to create msengine")
+		return nil
+	}
+	if err := ts.msEngine.Start(); err != nil {
+		fmt.Println("failed to start msengine")
+		return nil
+	}
+
 	cfg := shell.Config{
 		Type: shell.ShellTypeLocal,
 	}
-	sl := shell.NewShell(cfg)
-	cli.SetDefaultCli(sl)
+	ts.cliHandle = shell.NewShell(cfg)
+	cli.SetDefaultCli(ts.cliHandle)
+	ts.installCmd()
+
+	return ts
+}
+
+func (ts *ToolServer) EnterShell() error {
 
 	stop := make(chan struct{})
 	if err := cli.StartInteractiveShell(stop); err != nil {

@@ -25,11 +25,11 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/psrpc"
 	"github.com/livekit/sipgo/sip"
 
-	"github.com/livekit/sip/pkg/config"
+	apisip "github.com/commcos/msengine/apis/sip"
+	"github.com/commcos/msengine/signaling/sip/config"
+	siperrors "github.com/commcos/msengine/signaling/sip/errors"
 )
 
 const (
@@ -252,9 +252,9 @@ func sendRefer(ctx context.Context, c Signaling, req *sip.Request, stop <-chan s
 	case sip.StatusOK, 202: // 202 is Accepted
 		return resp, nil
 	case sip.StatusForbidden:
-		return resp, psrpc.NewErrorf(psrpc.PermissionDenied, "SIP REFER was denied")
+		return resp, siperrors.NewErrorf(siperrors.PermissionDenied, "SIP REFER was denied")
 	default:
-		return resp, psrpc.NewErrorf(psrpc.Internal, "SIP REFER failed with code %d", resp.StatusCode)
+		return resp, siperrors.NewErrorf(siperrors.Internal, "SIP REFER failed with code %d", resp.StatusCode)
 	}
 }
 
@@ -262,16 +262,16 @@ func parseNotifyBody(body string) (int, error) {
 	v := strings.Split(body, " ")
 
 	if len(v) < 2 {
-		return 0, psrpc.NewErrorf(psrpc.InvalidArgument, "invalid notify body: not enough tokens")
+		return 0, siperrors.NewErrorf(siperrors.InvalidArgument, "invalid notify body: not enough tokens")
 	}
 
 	if strings.ToUpper(v[0]) != "SIP/2.0" {
-		return 0, psrpc.NewErrorf(psrpc.InvalidArgument, "invalid notify body: wrong prefix or SIP version")
+		return 0, siperrors.NewErrorf(siperrors.InvalidArgument, "invalid notify body: wrong prefix or SIP version")
 	}
 
 	c, err := strconv.Atoi(v[1])
 	if err != nil {
-		return 0, psrpc.NewError(psrpc.InvalidArgument, err)
+		return 0, siperrors.NewError(siperrors.InvalidArgument, err)
 	}
 
 	return c, nil
@@ -283,7 +283,7 @@ func handleNotify(req *sip.Request) (method sip.RequestMethod, cseq uint32, stat
 		event = req.GetHeader("o")
 	}
 	if event == nil {
-		return "", 0, 0, psrpc.NewErrorf(psrpc.MalformedRequest, "no event in NOTIFY request")
+		return "", 0, 0, siperrors.NewErrorf(siperrors.MalformedRequest, "no event in NOTIFY request")
 	}
 
 	var cseq64 uint64
@@ -303,38 +303,38 @@ func handleNotify(req *sip.Request) (method sip.RequestMethod, cseq uint32, stat
 
 		return method, uint32(cseq64), status, nil
 	}
-	return "", 0, 0, psrpc.NewErrorf(psrpc.Unimplemented, "unknown event")
+	return "", 0, 0, siperrors.NewErrorf(siperrors.Unimplemented, "unknown event")
 }
 
-func sipStatusForErrorCode(code psrpc.ErrorCode) sip.StatusCode {
+func sipStatusForErrorCode(code siperrors.ErrorCode) sip.StatusCode {
 	switch code {
-	case psrpc.OK:
+	case siperrors.OK:
 		return sip.StatusOK
-	case psrpc.Canceled, psrpc.DeadlineExceeded:
+	case siperrors.Canceled, siperrors.DeadlineExceeded:
 		return sip.StatusRequestTimeout
-	case psrpc.Unknown, psrpc.MalformedResponse, psrpc.Internal, psrpc.DataLoss:
+	case siperrors.Unknown, siperrors.MalformedResponse, siperrors.Internal, siperrors.DataLoss:
 		return sip.StatusInternalServerError
-	case psrpc.InvalidArgument, psrpc.MalformedRequest:
+	case siperrors.InvalidArgument, siperrors.MalformedRequest:
 		return sip.StatusBadRequest
-	case psrpc.NotFound:
+	case siperrors.NotFound:
 		return sip.StatusNotFound
-	case psrpc.NotAcceptable:
+	case siperrors.NotAcceptable:
 		return sip.StatusNotAcceptable
-	case psrpc.AlreadyExists, psrpc.Aborted:
+	case siperrors.AlreadyExists, siperrors.Aborted:
 		return sip.StatusConflict
-	case psrpc.PermissionDenied:
+	case siperrors.PermissionDenied:
 		return sip.StatusForbidden
-	case psrpc.ResourceExhausted:
+	case siperrors.ResourceExhausted:
 		return sip.StatusTemporarilyUnavailable
-	case psrpc.FailedPrecondition:
+	case siperrors.FailedPrecondition:
 		return sip.StatusCallTransactionDoesNotExists
-	case psrpc.OutOfRange:
+	case siperrors.OutOfRange:
 		return sip.StatusRequestedRangeNotSatisfiable
-	case psrpc.Unimplemented:
+	case siperrors.Unimplemented:
 		return sip.StatusNotImplemented
-	case psrpc.Unavailable:
+	case siperrors.Unavailable:
 		return sip.StatusServiceUnavailable
-	case psrpc.Unauthenticated:
+	case siperrors.Unauthenticated:
 		return sip.StatusUnauthorized
 	default:
 		return sip.StatusInternalServerError
@@ -343,7 +343,7 @@ func sipStatusForErrorCode(code psrpc.ErrorCode) sip.StatusCode {
 
 func sipCodeAndMessageFromError(err error) (code sip.StatusCode, msg string) {
 	code = 200
-	var psrpcErr psrpc.Error
+	var psrpcErr siperrors.Error
 	if errors.As(err, &psrpcErr) {
 		code = sipStatusForErrorCode(psrpcErr.Code())
 	} else if err != nil {
@@ -368,9 +368,9 @@ func setCSeq(req *sip.Request, cseq uint32) {
 	req.AppendHeader(h)
 }
 
-func ToSIPUri(ip string, u sip.Uri) *livekit.SIPUri {
+func ToSIPUri(ip string, u sip.Uri) *apisip.SIPUri {
 	tr, _ := u.UriParams.Get("transport")
-	url := &livekit.SIPUri{
+	url := &apisip.SIPUri{
 		User:      u.User,
 		Host:      u.Host,
 		Ip:        ip,

@@ -25,23 +25,18 @@ import (
 	"github.com/frostbyte73/core"
 	"golang.org/x/exp/maps"
 
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
-	"github.com/livekit/protocol/rpc"
-	"github.com/livekit/protocol/tracer"
-	"github.com/livekit/psrpc"
 	"github.com/livekit/sipgo"
 	"github.com/livekit/sipgo/sip"
 
-	"github.com/livekit/sip/pkg/config"
-	siperrors "github.com/livekit/sip/pkg/errors"
-	"github.com/livekit/sip/pkg/stats"
+	apisip "github.com/commcos/msengine/apis/sip"
+	"github.com/commcos/msengine/signaling/sip/config"
+	siperrors "github.com/commcos/msengine/signaling/sip/errors"
+	"github.com/commcos/msengine/signaling/sip/stats"
 )
 
 type Client struct {
 	conf   *config.Config
 	sconf  *ServiceConfig
-	log    logger.Logger
 	region string
 	mon    *stats.Monitor
 
@@ -52,20 +47,15 @@ type Client struct {
 	activeCalls map[LocalTag]*outboundCall
 	byRemote    map[RemoteTag]*outboundCall
 
-	handler     Handler
-	getIOClient GetIOInfoClient
+	handler Handler
 }
 
-func NewClient(region string, conf *config.Config, log logger.Logger, mon *stats.Monitor, getIOClient GetIOInfoClient) *Client {
-	if log == nil {
-		log = logger.GetLogger()
-	}
+func NewClient(region string, conf *config.Config, mon *stats.Monitor) *Client {
+
 	c := &Client{
 		conf:        conf,
-		log:         log,
 		region:      region,
 		mon:         mon,
-		getIOClient: getIOClient,
 		activeCalls: make(map[LocalTag]*outboundCall),
 		byRemote:    make(map[RemoteTag]*outboundCall),
 	}
@@ -74,7 +64,7 @@ func NewClient(region string, conf *config.Config, log logger.Logger, mon *stats
 
 func (c *Client) Start(agent *sipgo.UserAgent, sc *ServiceConfig) error {
 	c.sconf = sc
-	c.log.Infow("client starting", "local", c.sconf.SignalingIPLocal, "external", c.sconf.SignalingIP)
+	slog.Info("client starting", "local", c.sconf.SignalingIPLocal, "external", c.sconf.SignalingIP)
 
 	if agent == nil {
 		ua, err := sipgo.NewUA(
@@ -89,7 +79,7 @@ func (c *Client) Start(agent *sipgo.UserAgent, sc *ServiceConfig) error {
 	var err error
 	c.sipCli, err = sipgo.NewClient(agent,
 		sipgo.WithClientHostname(c.sconf.SignalingIP.String()),
-		sipgo.WithClientLogger(slog.New(logger.ToSlogHandler(c.log))),
+		sipgo.WithClientLogger(slog.Default()),
 	)
 	if err != nil {
 		return err
@@ -122,88 +112,61 @@ func (c *Client) ContactURI(tr Transport) URI {
 	return getContactURI(c.conf, c.sconf.SignalingIP, tr)
 }
 
-func (c *Client) CreateSIPParticipant(ctx context.Context, req *rpc.InternalCreateSIPParticipantRequest) (*rpc.InternalCreateSIPParticipantResponse, error) {
-	ctx, span := tracer.Start(ctx, "Client.CreateSIPParticipant")
-	defer span.End()
-	return c.createSIPParticipant(ctx, req)
-}
-
-func (c *Client) createSIPParticipant(ctx context.Context, req *rpc.InternalCreateSIPParticipantRequest) (resp *rpc.InternalCreateSIPParticipantResponse, retErr error) {
+func (c *Client) NewSIPSession(ctx context.Context, req *apisip.NewSessionRequest) (retErr error) {
 	if !c.mon.CanAccept() {
-		return nil, siperrors.ErrUnavailable
+		return siperrors.ErrUnavailable
 	}
-	if req.CallTo == "" {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "call-to number must be set")
+	if req.ToNumber == "" {
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "call-to number must be set")
 	} else if req.Address == "" {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "trunk adresss must be set")
-	} else if req.Number == "" {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "trunk outbound number must be set")
-	} else if req.RoomName == "" {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "room name must be set")
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "trunk adresss must be set")
+	} else if req.FromNumber == "" {
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "trunk outbound number must be set")
 	}
-	if strings.Contains(req.CallTo, "@") {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "call_to should be a phone number or SIP user, not a full SIP URI")
+
+	if strings.Contains(req.ToNumber, "@") {
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "call_to should be a phone number or SIP user, not a full SIP URI")
 	}
 	if strings.HasPrefix(req.Address, "sip:") || strings.HasPrefix(req.Address, "sips:") {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "address must be a hostname without 'sip:' prefix")
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "address must be a hostname without 'sip:' prefix")
 	}
 	if strings.Contains(req.Address, "transport=") {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "address must not contain parameters; use transport field")
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "address must not contain parameters; use transport field")
 	}
 	if strings.ContainsAny(req.Address, ";=") {
-		return nil, psrpc.NewErrorf(psrpc.InvalidArgument, "address must not contain parameters")
+		return siperrors.NewErrorf(siperrors.InvalidArgument, "address must not contain parameters")
 	}
-	log := c.log
-	if req.ProjectId != "" {
-		log = log.WithValues("projectID", req.ProjectId)
-	}
-	if req.SipTrunkId != "" {
-		log = log.WithValues("sipTrunk", req.SipTrunkId)
-	}
-	log = log.WithValues(
-		"callID", req.SipCallId,
-		"room", req.RoomName,
-		"participant", req.ParticipantIdentity,
-		"participantName", req.ParticipantName,
+
+	slog := slog.With(
+		"callID", req.CallID,
 		"fromHost", req.Hostname,
-		"fromUser", req.Number,
+		"fromUser", req.FromNumber,
 		"toHost", req.Address,
-		"toUser", req.CallTo,
+		"toUser", req.ToNumber,
 	)
 
-	state := NewCallState(c.getIOClient(req.ProjectId), c.createSIPCallInfo(req))
+	state := NewCallState(c.createSIPCallInfo(req))
 
 	defer func() {
-		state.Update(ctx, func(info *livekit.SIPCallInfo) {
+		state.Update(ctx, func(info *apisip.SIPCallInfo) {
 
 			switch retErr {
 			case nil:
-				info.CallStatus = livekit.SIPCallStatus_SCS_PARTICIPANT_JOINED
+				info.CallStatus = apisip.SIPCallStatus_SCS_PARTICIPANT_JOINED
 			default:
-				info.CallStatus = livekit.SIPCallStatus_SCS_ERROR
-				info.DisconnectReason = livekit.DisconnectReason_UNKNOWN_REASON
+				info.CallStatus = apisip.SIPCallStatus_SCS_ERROR
+				info.DisconnectReason = apisip.DisconnectReason_UNKNOWN_REASON
 				info.Error = retErr.Error()
 			}
 		})
 	}()
 
-	roomConf := RoomConfig{
-		WsUrl:    req.WsUrl,
-		Token:    req.Token,
-		RoomName: req.RoomName,
-		Participant: ParticipantConfig{
-			Identity:   req.ParticipantIdentity,
-			Name:       req.ParticipantName,
-			Metadata:   req.ParticipantMetadata,
-			Attributes: req.ParticipantAttributes,
-		},
-	}
 	sipConf := sipOutboundConfig{
 		address:         req.Address,
 		transport:       req.Transport,
 		host:            req.Hostname,
-		from:            req.Number,
-		to:              req.CallTo,
+		from:            req.FromNumber,
+		to:              req.ToNumber,
 		user:            req.Username,
 		pass:            req.Password,
 		dtmf:            req.Dtmf,
@@ -212,53 +175,47 @@ func (c *Client) createSIPParticipant(ctx context.Context, req *rpc.InternalCrea
 		includeHeaders:  req.IncludeHeaders,
 		headersToAttrs:  req.HeadersToAttributes,
 		attrsToHeaders:  req.AttributesToHeaders,
-		ringingTimeout:  req.RingingTimeout.AsDuration(),
-		maxCallDuration: req.MaxCallDuration.AsDuration(),
 		enabledFeatures: req.EnabledFeatures,
 	}
-	log.Infow("Creating SIP participant")
-	call, err := c.newCall(ctx, c.conf, log, LocalTag(req.SipCallId), roomConf, sipConf, state)
-	if err != nil {
-		return nil, err
+	if req.RingingTimeout != nil {
+		sipConf.ringingTimeout = *req.RingingTimeout
 	}
-	p := call.Participant()
-	// Start actual SIP call async.
+	if req.MaxCallDuration != nil {
+		sipConf.maxCallDuration = *req.MaxCallDuration
+	}
 
-	info := &rpc.InternalCreateSIPParticipantResponse{
-		ParticipantId:       p.ID,
-		ParticipantIdentity: p.Identity,
-		SipCallId:           req.SipCallId,
+	slog.Info("Creating SIP participant")
+	call, err := c.newCall(ctx, c.conf, *slog, LocalTag(req.CallID), sipConf, state)
+	if err != nil {
+		return err
 	}
+
 	if !req.WaitUntilAnswered {
 		call.DialAsync(ctx)
-		return info, nil
+		return nil
 	}
 	if err := call.Dial(ctx); err != nil {
-		return nil, err
+		return err
 	}
 	go call.WaitClose(context.WithoutCancel(ctx))
-	return info, nil
+	return nil
 }
 
-func (c *Client) createSIPCallInfo(req *rpc.InternalCreateSIPParticipantRequest) *livekit.SIPCallInfo {
-	toUri := CreateURIFromUserAndAddress(req.CallTo, req.Address, TransportFrom(req.Transport))
+func (c *Client) createSIPCallInfo(req *apisip.NewSessionRequest) *apisip.SIPCallInfo {
+	toUri := CreateURIFromUserAndAddress(req.ToNumber, req.Address, TransportFrom(req.Transport))
 	fromiUri := URI{
-		User: req.Number,
+		User: req.FromNumber,
 		Host: req.Hostname,
 		Addr: netip.AddrPortFrom(c.sconf.SignalingIP, uint16(c.conf.SIPPort)),
 	}
 
-	callInfo := &livekit.SIPCallInfo{
-		CallId:                req.SipCallId,
-		Region:                c.region,
-		TrunkId:               req.SipTrunkId,
-		RoomName:              req.RoomName,
-		ParticipantIdentity:   req.ParticipantIdentity,
-		ParticipantAttributes: req.ParticipantAttributes,
-		CallDirection:         livekit.SIPCallDirection_SCD_OUTBOUND,
-		ToUri:                 toUri.ToSIPUri(),
-		FromUri:               fromiUri.ToSIPUri(),
-		CreatedAtNs:           time.Now().UnixNano(),
+	callInfo := &apisip.SIPCallInfo{
+		CallId:        req.CallID,
+		Region:        c.region,
+		CallDirection: apisip.SIPCallDirection_SCD_OUTBOUND,
+		ToUri:         toUri.ToSIPUri(),
+		FromUri:       fromiUri.ToSIPUri(),
+		CreatedAtNs:   time.Now().UnixNano(),
 	}
 
 	return callInfo
@@ -282,15 +239,15 @@ func (c *Client) onBye(req *sip.Request, tx sip.ServerTransaction) bool {
 	c.cmu.Unlock()
 	if call == nil {
 		if tag != "" {
-			c.log.Infow("BYE for non-existent call", "sipTag", tag)
+			slog.Info("BYE for non-existent call", "sipTag", tag)
 		}
 		_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Call does not exist", nil))
 		return false
 	}
-	call.log.Infow("BYE")
+	call.log.Info("BYE")
 	go func(call *outboundCall) {
 		call.cc.AcceptBye(req, tx)
-		call.CloseWithReason(CallHangup, "bye", livekit.DisconnectReason_CLIENT_INITIATED)
+		call.CloseWithReason(apisip.CallHangup, "bye", apisip.DisconnectReason_CLIENT_INITIATED)
 	}(call)
 	return true
 }
@@ -303,7 +260,7 @@ func (c *Client) onNotify(req *sip.Request, tx sip.ServerTransaction) bool {
 	if call == nil {
 		return false
 	}
-	call.log.Infow("NOTIFY")
+	call.log.Info("NOTIFY")
 	go func() {
 		err := call.cc.handleNotify(req, tx)
 

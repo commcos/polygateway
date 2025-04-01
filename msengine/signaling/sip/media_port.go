@@ -16,21 +16,20 @@ package sip
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
-	"github.com/livekit/protocol/logger"
-
-	"github.com/livekit/sip/pkg/media"
-	"github.com/livekit/sip/pkg/media/dtmf"
-	"github.com/livekit/sip/pkg/media/rtp"
-	"github.com/livekit/sip/pkg/media/sdp"
-	"github.com/livekit/sip/pkg/mixer"
-	"github.com/livekit/sip/pkg/stats"
+	"github.com/commcos/msengine/apis"
+	"github.com/commcos/msengine/media"
+	"github.com/commcos/msengine/media/dtmf"
+	"github.com/commcos/msengine/media/rtp"
+	"github.com/commcos/msengine/media/sdp"
+	"github.com/commcos/msengine/signaling/sip/mixer"
+	"github.com/commcos/msengine/signaling/sip/stats"
 )
 
 type MediaConf struct {
@@ -40,17 +39,17 @@ type MediaConf struct {
 
 type MediaConfig struct {
 	IP                  netip.Addr
-	Ports               rtcconfig.PortRange
+	Ports               apis.PortRange
 	MediaTimeoutInitial time.Duration
 	MediaTimeout        time.Duration
 	EnableJitterBuffer  bool
 }
 
-func NewMediaPort(log logger.Logger, mon *stats.CallMonitor, conf *MediaConfig, sampleRate int) (*MediaPort, error) {
+func NewMediaPort(log slog.Logger, mon *stats.CallMonitor, conf *MediaConfig, sampleRate int) (*MediaPort, error) {
 	return NewMediaPortWith(log, mon, nil, conf, sampleRate)
 }
 
-func NewMediaPortWith(log logger.Logger, mon *stats.CallMonitor, conn rtp.UDPConn, conf *MediaConfig, sampleRate int) (*MediaPort, error) {
+func NewMediaPortWith(log slog.Logger, mon *stats.CallMonitor, conn rtp.UDPConn, conf *MediaConfig, sampleRate int) (*MediaPort, error) {
 	mediaTimeout := make(chan struct{})
 	p := &MediaPort{
 		log:           log,
@@ -71,13 +70,13 @@ func NewMediaPortWith(log logger.Logger, mon *stats.CallMonitor, conn rtp.UDPCon
 	if err := p.conn.ListenAndServe(conf.Ports.Start, conf.Ports.End, "0.0.0.0"); err != nil {
 		return nil, err
 	}
-	p.log.Debugw("listening for media on UDP", "port", p.Port())
+	p.log.Debug("listening for media on UDP", "port", p.Port())
 	return p, nil
 }
 
 // MediaPort combines all functionality related to sending and accepting SIP media.
 type MediaPort struct {
-	log              logger.Logger
+	log              slog.Logger
 	mon              *stats.CallMonitor
 	externalIP       netip.Addr
 	conn             *rtp.Conn
@@ -92,8 +91,8 @@ type MediaPort struct {
 	dtmfOutAudio media.PCM16Writer
 
 	audioOutRTP    *rtp.Stream
-	audioOut       *media.SwitchWriter // SIP PCM -> LK RTP
-	audioIn        *media.SwitchWriter // LK RTP -> SIP PCM
+	audioOut       *media.SwitchWriter // LK PCM -> SIP RTP
+	audioIn        *media.SwitchWriter // SIP RTP -> LK PCM
 	audioInHandler rtp.Handler         // for debug only
 	dtmfIn         atomic.Pointer[func(ev dtmf.Event)]
 }
@@ -145,6 +144,9 @@ func (p *MediaPort) Config() *MediaConf {
 
 // WriteAudioTo sets audio writer that will receive decoded PCM from incoming RTP packets.
 func (p *MediaPort) WriteAudioTo(w media.PCM16Writer) {
+	if processor := p.conf.Processor; processor != nil {
+		w = processor(w)
+	}
 	if pw := p.audioIn.Swap(w); pw != nil {
 		_ = pw.Close()
 	}
@@ -187,7 +189,7 @@ func (p *MediaPort) SetOffer(offerData []byte) (*sdp.Answer, *MediaConf, error) 
 }
 
 func (p *MediaPort) SetConfig(c *MediaConf) error {
-	p.log.Infow("using codecs",
+	p.log.Info("using codecs",
 		"audio-codec", c.Audio.Codec.Info().SDPName, "audio-rtp", c.Audio.Type,
 		"dtmf-rtp", c.Audio.DTMFType,
 	)
@@ -213,11 +215,8 @@ func (p *MediaPort) setupOutput() {
 	s := rtp.NewSeqWriter(newRTPStatsWriter(p.mon, "audio", p.conn))
 	p.audioOutRTP = s.NewStream(p.conf.Audio.Type, p.conf.Audio.Codec.Info().RTPClockRate)
 
-	// Encoding pipeline (LK -> SIP)
+	// Encoding pipeline (LK PCM -> SIP RTP)
 	audioOut := p.conf.Audio.Codec.EncodeRTP(p.audioOutRTP)
-	if processor := p.conf.Processor; processor != nil {
-		audioOut = processor(audioOut)
-	}
 
 	if p.conf.Audio.DTMFType != 0 {
 		p.dtmfOutRTP = s.NewStream(p.conf.Audio.DTMFType, dtmf.SampleRate)
@@ -236,7 +235,7 @@ func (p *MediaPort) setupOutput() {
 }
 
 func (p *MediaPort) setupInput() {
-	// Decoding pipeline (SIP -> LK)
+	// Decoding pipeline (SIP RTP -> LK PCM)
 	audioHandler := p.conf.Audio.Codec.DecodeRTP(p.audioIn, p.conf.Audio.Type)
 	p.audioInHandler = audioHandler
 	if p.jitterEnabled {

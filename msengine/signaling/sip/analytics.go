@@ -18,23 +18,14 @@ import (
 	"context"
 	"sync"
 
-	"google.golang.org/protobuf/types/known/emptypb"
-
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/rpc"
-	"github.com/livekit/psrpc"
+	apisip "github.com/commcos/msengine/apis/sip"
 )
 
-type StateUpdater interface {
-	UpdateSIPCallState(ctx context.Context, req *rpc.UpdateSIPCallStateRequest, opts ...psrpc.RequestOption) (*emptypb.Empty, error)
-}
-
-func NewCallState(cli StateUpdater, initial *livekit.SIPCallInfo) *CallState {
+func NewCallState(initial *apisip.SIPCallInfo) *CallState {
 	if initial == nil {
-		initial = &livekit.SIPCallInfo{}
+		initial = &apisip.SIPCallInfo{}
 	}
 	s := &CallState{
-		cli:   cli,
 		info:  initial,
 		dirty: true,
 	}
@@ -43,19 +34,18 @@ func NewCallState(cli StateUpdater, initial *livekit.SIPCallInfo) *CallState {
 
 type CallState struct {
 	mu    sync.Mutex
-	cli   StateUpdater
-	info  *livekit.SIPCallInfo
+	info  *apisip.SIPCallInfo
 	dirty bool
 }
 
-func (s *CallState) DeferUpdate(update func(info *livekit.SIPCallInfo)) {
+func (s *CallState) DeferUpdate(update func(info *apisip.SIPCallInfo)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dirty = true
 	update(s.info)
 }
 
-func (s *CallState) Update(ctx context.Context, update func(info *livekit.SIPCallInfo)) {
+func (s *CallState) Update(ctx context.Context, update func(info *apisip.SIPCallInfo)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dirty = true
@@ -64,16 +54,7 @@ func (s *CallState) Update(ctx context.Context, update func(info *livekit.SIPCal
 }
 
 func (s *CallState) flush(ctx context.Context) {
-	if s.cli == nil {
-		s.dirty = false
-		return
-	}
-	_, err := s.cli.UpdateSIPCallState(context.WithoutCancel(ctx), &rpc.UpdateSIPCallStateRequest{
-		CallInfo: s.info,
-	})
-	if err == nil {
-		s.dirty = false
-	}
+
 }
 
 func (s *CallState) Flush(ctx context.Context) {

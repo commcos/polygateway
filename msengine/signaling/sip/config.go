@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"net/netip"
 
-	"github.com/livekit/sip/pkg/config"
+	"github.com/commcos/msengine/signaling/sip/config"
 )
 
 func GetServiceConfig(conf *config.Config) (*ServiceConfig, error) {

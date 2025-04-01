@@ -16,13 +16,13 @@ package sip
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
 	"strings"
 
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
+	apisip "github.com/commcos/msengine/apis/sip"
 	"github.com/livekit/sipgo/sip"
 )
 
@@ -38,29 +38,29 @@ func (h Headers) GetHeader(name string) sip.Header {
 	return nil
 }
 
-func TransportFrom(t livekit.SIPTransport) Transport {
+func TransportFrom(t apisip.SIPTransport) Transport {
 	switch t {
-	case livekit.SIPTransport_SIP_TRANSPORT_UDP:
+	case apisip.SIPTransport_SIP_TRANSPORT_UDP:
 		return TransportUDP
-	case livekit.SIPTransport_SIP_TRANSPORT_TCP:
+	case apisip.SIPTransport_SIP_TRANSPORT_TCP:
 		return TransportTCP
-	case livekit.SIPTransport_SIP_TRANSPORT_TLS:
+	case apisip.SIPTransport_SIP_TRANSPORT_TLS:
 		return TransportTLS
 	}
 	return ""
 }
 
-func SIPTransportFrom(t Transport) livekit.SIPTransport {
+func SIPTransportFrom(t Transport) apisip.SIPTransport {
 	switch t {
 	case TransportUDP:
-		return livekit.SIPTransport_SIP_TRANSPORT_UDP
+		return apisip.SIPTransport_SIP_TRANSPORT_UDP
 	case TransportTCP:
-		return livekit.SIPTransport_SIP_TRANSPORT_TCP
+		return apisip.SIPTransport_SIP_TRANSPORT_TCP
 	case TransportTLS:
-		return livekit.SIPTransport_SIP_TRANSPORT_TLS
+		return apisip.SIPTransport_SIP_TRANSPORT_TLS
 	}
 
-	return livekit.SIPTransport_SIP_TRANSPORT_AUTO
+	return apisip.SIPTransport_SIP_TRANSPORT_AUTO
 }
 
 type Transport string
@@ -166,8 +166,8 @@ func (u URI) GetContactURI() *sip.Uri {
 	return su
 }
 
-func (u URI) ToSIPUri() *livekit.SIPUri {
-	url := &livekit.SIPUri{
+func (u URI) ToSIPUri() *apisip.SIPUri {
+	url := &apisip.SIPUri{
 		User:      u.User,
 		Host:      u.GetHost(),
 		Port:      uint32(u.GetPort()),
@@ -215,39 +215,41 @@ func getTagFrom(params sip.HeaderParams) (RemoteTag, bool) {
 	return RemoteTag(tag), true
 }
 
-func LoggerWithParams(log logger.Logger, c Signaling) logger.Logger {
+func LoggerWithParams(log *slog.Logger, c Signaling) *slog.Logger {
 	if a := c.From(); a.Host != "" {
-		log = log.WithValues("fromHost", a.Host, "fromUser", a.User)
+		log = log.With("fromHost", a.Host, "fromUser", a.User)
 	}
 	if a := c.To(); a.Host != "" {
-		log = log.WithValues("toHost", a.Host, "toUser", a.User)
+		log = log.With("toHost", a.Host, "toUser", a.User)
 	}
 	if tag := c.Tag(); tag != "" {
-		log = log.WithValues("sipTag", tag)
+		log = log.With("sipTag", tag)
 	}
 	if cid := c.CallID(); cid != "" {
-		log = log.WithValues("sipCallID", cid)
+		log = log.With("sipCallID", cid)
 	}
 	return log
 }
 
-func LoggerWithHeaders(log logger.Logger, c Signaling) logger.Logger {
-	headers := c.RemoteHeaders()
-	for hdr, name := range headerToLog {
-		if h := headers.GetHeader(hdr); h != nil {
-			log = log.WithValues(name, h.Value())
-		}
-	}
-	return log
-}
+// func LoggerWithHeaders(log logger.Logger, c Signaling) logger.Logger {
+// 	headers := c.RemoteHeaders()
+// 	for hdr, name := range headerToLog {
+// 		if h := headers.GetHeader(hdr); h != nil {
+// 			log = log.WithValues(name, h.Value())
+// 		}
+// 	}
+// 	return log
+// }
 
-func HeadersToAttrs(attrs, hdrToAttr map[string]string, opts livekit.SIPHeaderOptions, c Signaling) map[string]string {
+func HeadersToAttrs(attrs, hdrToAttr map[string]string, opts apisip.SIPHeaderOptions, c Signaling, headers Headers) map[string]string {
 	if attrs == nil {
 		attrs = make(map[string]string)
 	}
-	headers := c.RemoteHeaders()
+	if c != nil {
+		headers = c.RemoteHeaders()
+	}
 	// Map all headers, if requested
-	if opts != livekit.SIPHeaderOptions_SIP_NO_HEADERS {
+	if opts != apisip.SIPHeaderOptions_SIP_NO_HEADERS {
 		for _, h := range headers {
 			if h == nil {
 				continue
@@ -257,32 +259,34 @@ func HeadersToAttrs(attrs, hdrToAttr map[string]string, opts livekit.SIPHeaderOp
 				continue
 			}
 			switch opts {
-			case livekit.SIPHeaderOptions_SIP_X_HEADERS:
+			case apisip.SIPHeaderOptions_SIP_X_HEADERS:
 				if !strings.HasPrefix(name, "x-") {
 					continue
 				}
 			}
-			attrs[livekit.AttrSIPHeaderPrefix+name] = h.Value()
+			attrs[apisip.AttrSIPHeaderPrefix+name] = h.Value()
 		}
 	}
 	// Global header mapping
-	for hdr, name := range headerToAttr {
-		if h := headers.GetHeader(hdr); h != nil {
-			attrs[name] = h.Value()
-		}
-	}
+	// for hdr, name := range headerToAttr {
+	// 	if h := headers.GetHeader(hdr); h != nil {
+	// 		attrs[name] = h.Value()
+	// 	}
+	// }
 	// Request mapping
 	for hdr, name := range hdrToAttr {
 		if h := headers.GetHeader(hdr); h != nil {
 			attrs[name] = h.Value()
 		}
 	}
-	// Other metadata
-	if tag := c.Tag(); tag != "" {
-		attrs[AttrSIPCallTag] = string(tag)
-	}
-	if cid := c.CallID(); cid != "" {
-		attrs[AttrSIPCallIDFull] = cid
+	if c != nil {
+		// Other metadata
+		if tag := c.Tag(); tag != "" {
+			attrs[apisip.AttrSIPCallTag] = string(tag)
+		}
+		if cid := c.CallID(); cid != "" {
+			attrs[apisip.AttrSIPCallIDFull] = cid
+		}
 	}
 	return attrs
 }
